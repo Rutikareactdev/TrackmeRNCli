@@ -104,6 +104,36 @@ const App = () => {
       return isGranted;
     };
 
+    const requestLocationPermissions = async () => {
+      if (Platform.OS !== "android") return true;
+
+      const fineLocation = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      );
+      if (fineLocation !== PermissionsAndroid.RESULTS.GRANTED) {
+        Alert.alert(
+          "Location Permission Needed",
+          "Tracking requires precise location permission."
+        );
+        return false;
+      }
+
+      if (Platform.Version >= 29) {
+        const backgroundLocation = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION
+        );
+        if (backgroundLocation !== PermissionsAndroid.RESULTS.GRANTED) {
+          Alert.alert(
+            "Background Location Needed",
+            "Allow 'All the time' so tracking continues in background."
+          );
+          return false;
+        }
+      }
+
+      return true;
+    };
+
     const locationSub = BackgroundGeolocation.onLocation(async (location) => {
       await postLocation(location);
     });
@@ -128,7 +158,10 @@ const App = () => {
     });
 
     const init = async () => {
-      await requestNotificationPermission();
+      const notificationGranted = await requestNotificationPermission();
+      const locationGranted = await requestLocationPermissions();
+      if (!notificationGranted || !locationGranted) return;
+
       await setupTracking();
       await BackgroundGeolocation.start();
     };
