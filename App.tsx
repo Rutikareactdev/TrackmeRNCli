@@ -1,10 +1,11 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { View, Text, Button, PermissionsAndroid, Platform, Alert } from "react-native";
 import BackgroundGeolocation from "react-native-background-geolocation";
 
 const App = () => {
   const BASE_URL = "http://192.168.0.103:4004/api/v1/"; // replace with your API endpoint
-  const TRACKING_INTERVAL_SECONDS = 20;
+  const TRACKING_INTERVAL_SECONDS = 5;
+  const lastPostedAtRef = useRef(0);
 
   useEffect(() => {
     const desiredAccuracyHigh = (BackgroundGeolocation as any).DESIRED_ACCURACY_HIGH;
@@ -51,11 +52,21 @@ const App = () => {
       console.log("✅ Tracking ready:", state.enabled);
     };
 
-    const postLocation = async (location: any) => {
+    const postLocation = async (location: any, source: "heartbeat" | "location") => {
+      const now = Date.now();
+      if (now - lastPostedAtRef.current < TRACKING_INTERVAL_SECONDS * 1000 - 250) {
+        console.log(`⏭️ Skip duplicate post (${source})`);
+        return;
+      }
+      lastPostedAtRef.current = now;
+
       const { latitude, longitude, accuracy } = location.coords;
 
-      console.log("📍 Location:", latitude, longitude);
+      console.log(`📍 Location (${source}):`, latitude, longitude);
 
+      // Ensure iOS/Android keep JS alive long enough to finish the request.
+      // Without this, background JS can be paused mid-fetch (logs happen, network doesn't).
+      const taskId = await (BackgroundGeolocation as any).startBackgroundTask();
       try {
         const token =
           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJhMGNmNGUwNy0yMWJmLTRiYjctOTRlZC05NWE5MjIxOGQxNTUiLCJ0ZW5hbnRJZCI6ImVlYTU3OTljLWMyZWYtNDJiMS05M2Q4LWY5NmQ2NmFjYjEyYyIsInJvbGVfaWQiOiJlZWE1Nzk5Yy1jMmVmLTQyYjEtOTNkOC1mOTZkNjZhY2IxMmQiLCJyb2xlX25hbWUiOiJUZW5hbnQgQWRtaW4iLCJpYXQiOjE3NzgxMjg3ODgsImV4cCI6MTc3ODIxNTE4OH0.3bA7X8komX9tO2QXSckCpiFFM8hWgq6uTiAZMfXBBaA";
@@ -84,6 +95,12 @@ const App = () => {
         console.log("✅ Location submitted", res.status, json);
       } catch (e) {
         console.log("BG error while posting location", e);
+      } finally {
+        try {
+          await (BackgroundGeolocation as any).stopBackgroundTask(taskId);
+        } catch {
+          // ignore
+        }
       }
     };
 
@@ -134,8 +151,9 @@ const App = () => {
       return true;
     };
 
-    const locationSub = BackgroundGeolocation.onLocation(async (location) => {
-      await postLocation(location);
+    // Avoid double-posting: heartbeat is the single source of truth for uploads.
+    const locationSub = BackgroundGeolocation.onLocation(async (_location) => {
+      console.log("📡 onLocation update received");
     });
 
     const heartbeatSub = BackgroundGeolocation.onHeartbeat(async () => {
@@ -147,7 +165,7 @@ const App = () => {
           persist: false,
           desiredAccuracy: desiredAccuracyHigh,
         });
-        await postLocation(location);
+        await postLocation(location, "heartbeat");
       } catch (e) {
         console.log("Heartbeat getCurrentPosition failed", e);
       }
